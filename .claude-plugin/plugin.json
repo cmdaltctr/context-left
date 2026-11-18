@@ -1,0 +1,11 @@
+{
+  "name": "context-left",
+  "version": "0.1.0",
+  "description": "Shows the context window left in the prompt footer, coloured green, orange or red",
+  "author": {
+    "name": "Dr Muhammad Aizat Hawari",
+    "url": "https://github.com/cmdaltctr"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}

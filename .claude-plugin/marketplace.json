@@ -1,0 +1,15 @@
+{
+  "name": "context-left",
+  "owner": {
+    "name": "Dr Muhammad Aizat Hawari",
+    "url": "https://github.com/cmdaltctr"
+  },
+  "description": "Context window footer for Claude Code",
+  "plugins": [
+    {
+      "name": "context-left",
+      "source": "./",
+      "description": "Shows the context window left in the prompt footer, coloured green, orange or red"
+    }
+  ]
+}
