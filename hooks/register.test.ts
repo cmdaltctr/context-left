@@ -1,4 +1,6 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect, mock, test } from 'claude-code/testing'
+
+import { PIN_INSTRUCTIONS } from './compact'
 
 const SESSION = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
 
@@ -87,5 +89,112 @@ describe('context left', () => {
     const draw = await label($, ['plan mode'])
     await $.session.start(SESSION)
     expect((await draw()).text).toContain('plan mode · ctx: 40k/200k')
+  })
+})
+
+describe('compaction trigger', () => {
+  const ON = { compactEnabled: true, compactAtPercent: '60' }
+
+  /** The engine's side: usage at a settable percent, and a record of each compaction. */
+  function engine(on: any, state: { percent?: number; reject?: boolean }) {
+    const compacts: any[] = []
+    on('session.start', (_$: any, e: any) => ({ cwd: e.cwd }))
+    on('session.usage', () => ({
+      value: { startedAt: 0, context: { tokens: 1, window: 200_000, percent: state.percent }, rateLimits: [] },
+    }))
+    on('session.measure', (_$: any, e: any) => ({ changed: e.changed }))
+    on('turn.complete', (_$: any, e: any) => ({ text: e.answer ?? '' }) as any)
+    on('ui.log', () => ({ value: undefined }) as any)
+    on('session.compact', (_$: any, e: any) => {
+      compacts.push(e)
+      if (state.reject) throw new Error('a turn is running')
+      return { skip: 'test' }
+    })
+    return compacts
+  }
+
+  const ended = ($: any, extra: Record<string, unknown> = {}) =>
+    $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer', ...extra })
+  const measured = ($: any, percent: number) =>
+    $.session.measure({
+      context: { tokens: 1, window: 200_000, percent },
+      rateLimits: [],
+      changed: ['context'],
+    })
+
+  test('compacts after the turn that crosses the threshold, with the pin', { options: ON }, async ($, on) => {
+    const clock = mock.clock(on)
+    const compacts = engine(on, { percent: 65 })
+    await $.session.start(SESSION)
+    await ended($)
+    await clock.advance(1000)
+    expect(compacts.length).toBe(1)
+    expect(compacts[0].instructions).toBe(PIN_INSTRUCTIONS)
+  })
+
+  test('below the threshold, nothing happens', { options: ON }, async ($, on) => {
+    const clock = mock.clock(on)
+    const compacts = engine(on, { percent: 59 })
+    await $.session.start(SESSION)
+    await ended($)
+    await clock.advance(1000)
+    expect(compacts.length).toBe(0)
+  })
+
+  test('off by default', async ($, on) => {
+    const clock = mock.clock(on)
+    const compacts = engine(on, { percent: 95 })
+    await $.session.start(SESSION)
+    await ended($)
+    await clock.advance(1000)
+    expect(compacts.length).toBe(0)
+  })
+
+  test('the threshold is a setting', { options: { compactEnabled: true, compactAtPercent: '80' } }, async ($, on) => {
+    const clock = mock.clock(on)
+    const compacts = engine(on, { percent: 70 })
+    await $.session.start(SESSION)
+    await ended($)
+    await clock.advance(1000)
+    expect(compacts.length).toBe(0)
+  })
+
+  test('an interrupted turn and a subagent turn do not trigger it', { options: ON }, async ($, on) => {
+    const clock = mock.clock(on)
+    const compacts = engine(on, { percent: 90 })
+    await $.session.start(SESSION)
+    await ended($, { reason: 'aborted', isAborted: true })
+    await ended($, { agentId: 'a1' })
+    await clock.advance(1000)
+    expect(compacts.length).toBe(0)
+  })
+
+  test('once per crossing: the next turn waits until usage falls below the threshold', { options: ON }, async ($, on) => {
+    const clock = mock.clock(on)
+    const compacts = engine(on, { percent: 65 })
+    await $.session.start(SESSION)
+    await ended($)
+    await clock.advance(1000)
+    await ended($)
+    await clock.advance(1000)
+    expect(compacts.length).toBe(1)
+    await measured($, 20)
+    await measured($, 65)
+    await ended($)
+    await clock.advance(1000)
+    expect(compacts.length).toBe(2)
+  })
+
+  test('a compaction the engine refuses is tried again at the next turn', { options: ON }, async ($, on) => {
+    const clock = mock.clock(on)
+    const state = { percent: 65, reject: true }
+    const compacts = engine(on, state)
+    await $.session.start(SESSION)
+    await ended($)
+    await clock.advance(1000)
+    state.reject = false
+    await ended($)
+    await clock.advance(1000)
+    expect(compacts.length).toBe(2)
   })
 })

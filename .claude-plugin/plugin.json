@@ -1,11 +1,113 @@
 {
   "name": "context-left",
-  "version": "0.1.0",
-  "description": "Shows the context window left in the prompt footer, coloured green, orange or red",
+  "version": "0.2.1",
+  "description": "Shows the context window left in the prompt footer, coloured green, orange or red. Optionally compacts at a set percentage, with Jev clearing old tool output first",
   "author": {
     "name": "Dr Muhammad Aizat Hawari",
     "url": "https://github.com/cmdaltctr"
   },
   "license": "MIT",
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "compactEnabled": {
+      "type": "boolean",
+      "title": "Compact automatically",
+      "description": "Start a compaction when a turn ends at or above the threshold below, and let Jev clear old tool output first. Off: the mod only shows the footer label",
+      "default": false
+    },
+    "compactAtPercent": {
+      "type": "string",
+      "title": "Compact at (% used)",
+      "description": "Share of the context window used at which a turn's end starts a compaction",
+      "default": "60",
+      "options": [
+        "40",
+        "50",
+        "60",
+        "70",
+        "80"
+      ]
+    },
+    "compactModel": {
+      "type": "string",
+      "title": "Summary model",
+      "description": "Model that writes the summary. If its call fails, the engine writes the summary instead",
+      "default": "sonnet",
+      "options": [
+        "sonnet",
+        "opus",
+        "haiku"
+      ]
+    },
+    "compactEffort": {
+      "type": "string",
+      "title": "Summary effort",
+      "description": "Reasoning effort of the summary call",
+      "default": "medium",
+      "options": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "typesafeApiKey": {
+      "type": "string",
+      "title": "TypeSafe API key",
+      "description": "Key for TypeSafe's API. With none set, Jev clears nothing and the summary is still written",
+      "default": "",
+      "sensitive": true
+    },
+    "typesafeModel": {
+      "type": "string",
+      "title": "TypeSafe model",
+      "description": "Decision model on TypeSafe's API",
+      "default": "jev-latest"
+    },
+    "keepRecentToolResults": {
+      "type": "string",
+      "title": "Recent tool results kept",
+      "description": "How many of the newest tool results Jev is never asked about",
+      "default": "3",
+      "options": [
+        "1",
+        "2",
+        "3",
+        "5",
+        "8"
+      ]
+    },
+    "dropConfidence": {
+      "type": "string",
+      "title": "Confidence to clear",
+      "description": "How sure Jev must be that a tool output is not needed again before it is cleared. A higher number clears less",
+      "default": "0.8",
+      "options": [
+        "0.6",
+        "0.7",
+        "0.8",
+        "0.9",
+        "0.95"
+      ]
+    },
+    "jevTimeoutMs": {
+      "type": "string",
+      "title": "Jev timeout (ms)",
+      "description": "How long to wait for each Jev attempt, in milliseconds. Each request gets three attempts",
+      "default": "5000",
+      "options": [
+        "3000",
+        "5000",
+        "10000",
+        "20000"
+      ]
+    },
+    "resetToDefaults": {
+      "type": "boolean",
+      "title": "Reset to defaults",
+      "description": "On: ignore every value above except the API key and Compact automatically, and use the defaults. Off: use your values",
+      "default": false
+    }
+  }
 }

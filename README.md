@@ -16,6 +16,7 @@ The footer label looks like `ctx: 76k/200k (38%)`. Its colour changes as the win
 - [Requirements](#requirements)
 - [Install](#install)
 - [How it works](#how-it-works)
+- [Automatic compaction](#automatic-compaction)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
 - [Licence](#licence)
@@ -47,17 +48,27 @@ https://github.com/cmdaltctr/context-left. Do these steps in order:
         "autoUpdate": true
       }
    c. Change nothing else in the file. Check that the file is valid JSON.
-6. Tell me to restart Claude Code.
+6. Ask me: "Do you want to turn on automatic compaction? It is off by default.
+   If it is on, Jev (TypeSafe) clears old tool output before each compaction, and
+   the first 1,500 characters of that output go to TypeSafe. It needs a TypeSafe API key."
+   Only if I say yes:
+   a. Ask me for the key. Do not print it or save it in any file in the repository.
+   b. In ~/.claude/settings.json, under "pluginConfigs" -> "context-left@context-left",
+      set "compactEnabled" to true under "options". Put the key in "typesafeApiKey".
+   c. Change nothing else in the file. Check that the file is valid JSON.
+   If I say no, change nothing.
+7. Tell me to restart Claude Code.
 ```
 
-After the restart, run `claude --debug` and look for `hooks module context-left@context-left loaded`. See [Troubleshooting](#troubleshooting) if the line is missing.
+If you turned on compaction, check the settings in `/plugin`. After the restart, run `claude --debug` and look for `hooks module context-left@context-left loaded`. See [Troubleshooting](#troubleshooting) if the line is missing.
 
 </details>
 
 ## Requirements
 
 - Claude Code 2.1.292 or later for the one-step install below. Claude Code 2.1.287 and later run mods with no extra setting.
-- No API key and no network access.
+- The footer label needs no API key and no network access.
+- Automatic compaction is off by default. Jev (TypeSafe) clearing needs a TypeSafe API key and network access. See [Automatic compaction](#automatic-compaction). Decision record: [ADR-001](docs/adr/001-opt-in-compaction-with-jev-pruning.md).
 
 ## Install
 
@@ -134,7 +145,40 @@ A folder copy replaces a marketplace copy with the same name. Do not use both me
 - The mod draws its label after the other footer labels, with a `·` between them.
 - Before the first response, and after a compaction, the label shows `ctx: –` until the next figures arrive.
 
-The colour limits are constants at the top of `hooks/register.tsx` (`ORANGE_FROM = 50`, `RED_ABOVE = 80`). The mod has no options.
+The colour limits are constants at the top of `hooks/register.tsx` (`ORANGE_FROM = 50`, `RED_ABOVE = 80`).
+
+<a id="automatic-compaction"></a>
+
+## Automatic compaction
+
+This part is off by default. Set `compactEnabled` to `true` to turn it on.
+
+When a turn ends at or above `compactAtPercent` of the window used, the mod starts a compaction. It starts one compaction per crossing. The next one waits until usage falls below the threshold.
+
+The mod changes every compaction while it is on, including `/compact` and the engine's own:
+
+1. Jev (TypeSafe) reads each old tool output and judges whether the model needs it again. Outputs it is sure about are replaced with a short note. Errors, short outputs and the newest three results are never cleared.
+2. The summary model (Sonnet at medium effort by default) writes the summary from the cleared conversation.
+3. If the Jev step or the summary call fails, the engine compacts as it would without the mod. Each Jev request gets three attempts.
+
+Privacy: with a TypeSafe key set, the first 1,500 characters of each old tool output and your latest request go to TypeSafe. With no key, nothing leaves the machine and step 1 is skipped.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `compactEnabled` | off | Master switch for this whole section. |
+| `compactAtPercent` | 60 | Share of the window used that starts a compaction. Pick 40 to 80. |
+| `compactModel` | `sonnet` | Model that writes the summary. Pick `sonnet`, `opus` or `haiku`. |
+| `compactEffort` | `medium` | Reasoning effort of the summary call. |
+| `typesafeApiKey` | empty | TypeSafe key. Empty skips the Jev step. |
+| `typesafeModel` | `jev-latest` | Jev model. |
+| `keepRecentToolResults` | 3 | Newest tool results Jev is never asked about. Pick 1 to 8. |
+| `dropConfidence` | 0.8 | How sure Jev must be before an output is cleared. Higher clears less. Pick 0.6 to 0.95. |
+| `jevTimeoutMs` | 5000 | Wait per Jev attempt. Pick 3000 to 20000. |
+| `resetToDefaults` | off | On: every value above except the key and `compactEnabled` is ignored and the defaults apply. |
+
+The config menu shows a default only for a toggle or a picker, so the numbers are pickers. A stored value outside a picker's list counts as unset.
+
+Set them with `/plugin`, or under `pluginConfigs` in `~/.claude/settings.json`.
 
 ## Troubleshooting
 
@@ -148,8 +192,10 @@ The colour limits are constants at the top of `hooks/register.tsx` (`ORANGE_FROM
 
 | File | Purpose |
 |---|---|
-| `hooks/register.tsx` | The hooks module. Stores the figures and draws the footer label. |
-| `hooks/register.test.ts` | Tests for the colours, the update after each response and the footer layout. |
+| `hooks/register.tsx` | The hooks module. Stores the figures, draws the footer label and starts compactions. |
+| `hooks/compact.ts` | Compaction logic: Jev judgments, clearing and the summary. |
+| `hooks/register.test.ts` | Tests for the colours, the update after each response, the footer layout and the trigger. |
+| `hooks/compact.test.ts` | Tests for the Jev calls, the clearing and the compaction hook. |
 | `.claude-plugin/plugin.json` | Manifest. |
 | `.claude-plugin/marketplace.json` | Marketplace entry for this repository. |
 | `types/index.d.ts` | Type declaration for the stored state. |
