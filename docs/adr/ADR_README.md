@@ -6,7 +6,7 @@ This directory records the significant decisions made during development.
 
 | ADR | Title | Date | Status |
 |-----|-------|------|--------|
-| [001](./001-opt-in-compaction-with-jev-pruning.md) | Opt-in compaction with Jev pruning | 2026-11-18 | Proposed |
+| [001](./001-opt-in-compaction-with-jev-pruning.md) | Opt-in compaction with Jev pruning | 2026-11-18 | Accepted |
 
 ## Convention
 

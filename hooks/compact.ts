@@ -1,9 +1,9 @@
-import type { ModelEffort, SessionCompactInput, SessionCompactResult, SessionMessage } from 'claude-code'
+import type { SessionCompactInput, SessionCompactResult, SessionMessage } from 'claude-code'
 
 // Compaction at a context threshold. Pure helpers plus one network call: Jev
 // (TypeSafe) judges which old tool outputs the model will not need again, and
-// those are cleared before the summary is written. Every failure leaves the
-// conversation as it was, so pruning never blocks a compaction.
+// those are cleared before the engine writes the summary. Every failure leaves
+// the conversation as it was, so pruning never blocks a compaction.
 
 export const CLEARED = '[tool output cleared by context-left: judged not needed again]'
 
@@ -21,8 +21,6 @@ const JEV_URL = 'https://api.typesafe.ai/v1/systemone'
 export type CompactSettings = {
   enabled: boolean
   atPercent: number
-  model: string
-  effort: string
   apiKey: string
   jevModel: string
   keepRecent: number
@@ -48,8 +46,6 @@ export function readSettings(given: Record<string, unknown>): CompactSettings {
   return {
     enabled: given.compactEnabled === true,
     atPercent: number('compactAtPercent', 60),
-    model: text('compactModel', 'sonnet'),
-    effort: text('compactEffort', 'medium'),
     apiKey: typeof given.typesafeApiKey === 'string' ? given.typesafeApiKey : '',
     jevModel: text('typesafeModel', DEFAULT_JEV_MODEL),
     keepRecent: number('keepRecentToolResults', 3),
@@ -88,11 +84,18 @@ export function pickCandidates(messages: readonly SessionMessage[], keepRecent: 
     }))
 }
 
+/**
+ * Rows the engine stores with the user role that the person did not type:
+ * background events, slash-command records and `!` shell runs.
+ */
+const ENGINE_ROW = /^<(task-notification|command-name|command-message|local-command-|system-reminder|bash-input|bash-stdout|bash-stderr)/
+
 /** The newest thing the person typed; what the old outputs are weighed against. */
 export function lastRequest(messages: readonly SessionMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]
-    if (message?.role === 'user' && message.text.trim()) return message.text
+    const text = message?.text.trim() ?? ''
+    if (message?.role === 'user' && text && !ENGINE_ROW.test(text)) return message.text
   }
   return ''
 }
@@ -189,6 +192,7 @@ export async function judge(
   for (let i = 0; i < candidates.length; i += CHUNK) {
     cleared.push(...(await askChunk(net, settings, request, candidates.slice(i, i + CHUNK))))
   }
+  net.log(`[context-left] Jev cleared ${cleared.length} of ${candidates.length} old tool outputs`)
   return cleared
 }
 
@@ -215,98 +219,25 @@ export function clearResults(
   })
 }
 
-/** What the engine's own summariser is told to protect, when it writes the summary. */
+/** What the engine's summariser is told to protect. */
 export const PIN_INSTRUCTIONS =
   'Keep the goal and every constraint the person stated, in their words. Keep decisions with the reason for each, errors not yet fixed, approaches that failed and why, and the paths of files changed or still in play. Drop raw tool output.'
 
-const SUMMARY_SYSTEM = `You write the summary that replaces a long coding-agent conversation. The agent continues from your summary alone, so it must be complete. Reply with the summary text only. Do not call tools.
-
-Use these sections:
-1. Task: the request and its success criteria.
-2. Latest request: the person's newest message, verbatim.
-3. State: what is done, with the paths of files created or changed.
-4. Discoveries: constraints, decisions and the reason for each, errors and their fixes, approaches that failed and why.
-5. Next steps: what to do next, blockers, open questions.
-6. Keep: the person's preferences and rules, in their words, and any promise made.
-
-Leave out raw tool output and resolved dead ends.`
-
-/** A transcript longer than this (about 125k tokens) goes to the engine's summariser. */
-const MAX_TRANSCRIPT_CHARS = 500_000
-const RESULT_CHARS = 1200
-const INPUT_CHARS = 200
-
-/** The conversation as plain text, for the summariser. Results are cut short. */
-export function transcript(messages: readonly SessionMessage[]): string {
-  const lines: string[] = []
-  for (const message of messages) {
-    if (message.text.trim()) lines.push(`${message.role === 'user' ? 'PERSON' : 'ASSISTANT'}: ${message.text}`)
-    for (const use of message.toolUses) {
-      lines.push(`CALL ${use.tool}: ${JSON.stringify(use.input).slice(0, INPUT_CHARS)}`)
-    }
-    for (const result of message.toolResults ?? []) {
-      lines.push(`${result.isError ? 'ERROR' : 'RESULT'}: ${result.text.slice(0, RESULT_CHARS)}`)
-    }
-  }
-  return lines.join('\n')
-}
-
-/** What `handleCompact` needs from the engine, apart from the network. */
-export type Env = {
-  net: Net
-  complete: (request: {
-    model: string
-    effort: ModelEffort
-    system: string
-    prompt: string
-    maxTokens: number
-    timeoutMs: number
-  }) => Promise<{ isAnswered: boolean; text?: string }>
-}
-
-async function summarise(
-  env: Env,
-  settings: CompactSettings,
-  messages: readonly SessionMessage[],
-  focus: string | undefined,
-): Promise<string | null> {
-  const body = transcript(messages)
-  if (body.length > MAX_TRANSCRIPT_CHARS) return null
-  try {
-    const reply = await env.complete({
-      model: settings.model,
-      effort: settings.effort as ModelEffort,
-      system: SUMMARY_SYSTEM,
-      prompt: focus ? `${body}\n\nThe person asks the summary to stress: ${focus}` : body,
-      maxTokens: 6000,
-      timeoutMs: 180_000,
-    })
-    return reply.isAnswered && reply.text?.trim() ? reply.text.trim() : null
-  } catch (error) {
-    env.net.log(`[context-left] summary call failed: ${String(error)}`)
-    return null
-  }
-}
-
 /**
- * The `session.compact` hook. Jev clears old tool outputs, then the chosen
- * model writes the summary. Where either step fails the engine compacts as it
- * would have, so a failure here never stops a compaction.
+ * The `session.compact` hook. Jev clears old tool outputs, then the engine
+ * writes the summary with the pin instructions added. The engine keeps the
+ * newest messages verbatim and links the full transcript, which a summary
+ * written here would lose (ADR-001).
  */
 export async function handleCompact(
-  env: Env,
+  net: Net,
   settings: CompactSettings,
   e: SessionCompactInput,
   next: (e: SessionCompactInput) => Promise<SessionCompactResult>,
 ): Promise<SessionCompactResult> {
   if (!settings.enabled || e.trigger === 'precompute' || e.agentId) return next(e)
-  const cleared = await judge(env.net, settings, e.messages)
+  const cleared = await judge(net, settings, e.messages)
   const messages = cleared.length > 0 ? clearResults(e.messages, cleared) : e.messages
-  const summary = await summarise(env, settings, messages, e.instructions)
-  if (summary) {
-    const text = `This session continues an earlier conversation. Its summary:\n\n${summary}`
-    return { messages: [{ role: 'user', text, toolUses: [] }] }
-  }
   const instructions = [e.instructions, PIN_INSTRUCTIONS].filter(Boolean).join('\n\n')
   return next({ ...e, messages, instructions })
 }
