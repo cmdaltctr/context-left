@@ -1,6 +1,6 @@
 {
   "name": "context-left",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Shows the context window left in the prompt footer, coloured green, orange or red. Optionally compacts at a set percentage, with Jev clearing old tool output first",
   "author": {
     "name": "Dr Muhammad Aizat Hawari",
@@ -28,34 +28,10 @@
         "80"
       ]
     },
-    "compactModel": {
-      "type": "string",
-      "title": "Summary model",
-      "description": "Model that writes the summary. If its call fails, the engine writes the summary instead",
-      "default": "sonnet",
-      "options": [
-        "sonnet",
-        "opus",
-        "haiku"
-      ]
-    },
-    "compactEffort": {
-      "type": "string",
-      "title": "Summary effort",
-      "description": "Reasoning effort of the summary call",
-      "default": "medium",
-      "options": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
     "typesafeApiKey": {
       "type": "string",
       "title": "TypeSafe API key",
-      "description": "Key for TypeSafe's API. With none set, Jev clears nothing and the summary is still written",
+      "description": "Key for TypeSafe's API. With none set, Jev clears nothing and the engine still writes the summary",
       "default": "",
       "sensitive": true
     },

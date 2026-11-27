@@ -158,8 +158,10 @@ When a turn ends at or above `compactAtPercent` of the window used, the mod star
 The mod changes every compaction while it is on, including `/compact` and the engine's own:
 
 1. Jev (TypeSafe) reads each old tool output and judges whether the model needs it again. Outputs it is sure about are replaced with a short note. Errors, short outputs and the newest three results are never cleared.
-2. The summary model (Sonnet at medium effort by default) writes the summary from the cleared conversation.
-3. If the Jev step or the summary call fails, the engine compacts as it would without the mod. Each Jev request gets three attempts.
+2. The engine writes the summary from the cleared conversation. The mod adds an instruction to keep your goal, constraints, decisions, open errors and file paths. The engine also keeps the newest messages word for word.
+3. If the Jev step fails, the engine compacts as it would without the mod. Each Jev request gets three attempts.
+
+Each compaction logs one line, for example `[context-left] Jev cleared 12 of 80 old tool outputs`.
 
 Privacy: with a TypeSafe key set, the first 1,500 characters of each old tool output and your latest request go to TypeSafe. With no key, nothing leaves the machine and step 1 is skipped.
 
@@ -167,8 +169,6 @@ Privacy: with a TypeSafe key set, the first 1,500 characters of each old tool ou
 |---|---|---|
 | `compactEnabled` | off | Master switch for this whole section. |
 | `compactAtPercent` | 60 | Share of the window used that starts a compaction. Pick 40 to 80. |
-| `compactModel` | `sonnet` | Model that writes the summary. Pick `sonnet`, `opus` or `haiku`. |
-| `compactEffort` | `medium` | Reasoning effort of the summary call. |
 | `typesafeApiKey` | empty | TypeSafe key. Empty skips the Jev step. |
 | `typesafeModel` | `jev-latest` | Jev model. |
 | `keepRecentToolResults` | 3 | Newest tool results Jev is never asked about. Pick 1 to 8. |
@@ -193,7 +193,7 @@ Set them with `/plugin`, or under `pluginConfigs` in `~/.claude/settings.json`.
 | File | Purpose |
 |---|---|
 | `hooks/register.tsx` | The hooks module. Stores the figures, draws the footer label and starts compactions. |
-| `hooks/compact.ts` | Compaction logic: Jev judgments, clearing and the summary. |
+| `hooks/compact.ts` | Compaction logic: Jev judgments, clearing and the pin instruction. |
 | `hooks/register.test.ts` | Tests for the colours, the update after each response, the footer layout and the trigger. |
 | `hooks/compact.test.ts` | Tests for the Jev calls, the clearing and the compaction hook. |
 | `.claude-plugin/plugin.json` | Manifest. |

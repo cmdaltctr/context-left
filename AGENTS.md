@@ -14,7 +14,7 @@ Rules for agents that change this mod. For install steps, read `README.md`.
 ## Rules
 
 1. Keep the mod free of `node_modules` and polling. The figures come from `session.start` and `session.measure`. The only network call goes to TypeSafe's API, from `judge` in `compact.ts`, during a compaction and only when `compactEnabled` is on and a key is set.
-2. Always call `next(e)` in each hook and return its result. Other mods draw in the same footer. The one exception: the `session.compact` hook may answer in the engine's place when its summary succeeds.
+2. Always call `next(e)` in each hook and return its result. Other mods draw in the same footer. The engine writes the compaction summary; do not answer `session.compact` in its place (ADR-001).
 3. Keep the colour limits as the constants `ORANGE_FROM` and `RED_ABOVE` at the top of `register.tsx`.
 4. Write a failing test before you fix a bug. Check that the test fails on the old code.
 5. Use British English in comments, docs and commit messages. Use Conventional Commits.

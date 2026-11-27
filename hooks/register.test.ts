@@ -132,6 +132,14 @@ describe('compaction trigger', () => {
     expect(compacts[0].instructions).toBe(PIN_INSTRUCTIONS)
   })
 
+  test('starts the compaction as the turn ends, before a queued turn can begin', { options: ON }, async ($, on) => {
+    mock.clock(on)
+    const compacts = engine(on, { percent: 65 })
+    await $.session.start(SESSION)
+    await ended($)
+    expect(compacts.length).toBe(1)
+  })
+
   test('below the threshold, nothing happens', { options: ON }, async ($, on) => {
     const clock = mock.clock(on)
     const compacts = engine(on, { percent: 59 })

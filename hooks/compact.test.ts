@@ -6,6 +6,7 @@ import {
   handleCompact,
   judge,
   jevBody,
+  lastRequest,
   pickCandidates,
   readDrops,
   PIN_INSTRUCTIONS,
@@ -67,12 +68,10 @@ const ok = (text: string): Reply => ({ ok: true, status: 200, text })
 const status = (code: number): Reply => ({ ok: false, status: code, text: '' })
 
 describe('settings', () => {
-  test('off by default, Sonnet at medium effort, 60% trigger, three attempts', () => {
+  test('off by default, 60% trigger, 0.8 confidence, newest three kept', () => {
     const s = readSettings({})
     expect(s.enabled).toBe(false)
     expect(s.atPercent).toBe(60)
-    expect(s.model).toBe('sonnet')
-    expect(s.effort).toBe('medium')
     expect(s.dropConfidence).toBe(0.8)
     expect(s.keepRecent).toBe(3)
   })
@@ -102,14 +101,12 @@ describe('settings from the config menu', () => {
       compactEnabled: true,
       typesafeApiKey: 'k',
       compactAtPercent: '80',
-      compactModel: 'opus',
-      compactEffort: 'high',
+      dropConfidence: '0.9',
     })
     expect(s.enabled).toBe(true)
     expect(s.apiKey).toBe('k')
     expect(s.atPercent).toBe(60)
-    expect(s.model).toBe('sonnet')
-    expect(s.effort).toBe('medium')
+    expect(s.dropConfidence).toBe(0.8)
   })
 })
 
@@ -171,6 +168,23 @@ describe('Jev answers', () => {
   })
 })
 
+describe('the request Jev weighs outputs against', () => {
+  test('is the person\'s newest message, not a background event or command record', () => {
+    const messages = [
+      ask('deploy the pod and watch the run'),
+      call('a'), back('a'),
+      ask('<task-notification>\n<task-id>b1</task-id>\n<summary>Monitor event: tick 3</summary>\n</task-notification>'),
+      ask('<command-name>/reload-plugins</command-name>\n<command-message>reload-plugins</command-message>'),
+      ask('<local-command-caveat>Caveat: run directly</local-command-caveat>'),
+    ]
+    expect(lastRequest(messages)).toBe('deploy the pod and watch the run')
+  })
+
+  test('a person\'s message that starts with other markup still counts', () => {
+    expect(lastRequest([ask('<div> is not centred, fix it')])).toBe('<div> is not centred, fix it')
+  })
+})
+
 describe('asking Jev', () => {
   const messages = [ask('fix'), call('a'), back('a'), call('b'), back('b'), call('c'), back('c'), call('d'), back('d')]
 
@@ -201,6 +215,13 @@ describe('asking Jev', () => {
     const world = net([status(401), ok(answer([0.05]))])
     expect(await judge(world as any, SETTINGS, messages)).toEqual([])
     expect(world.sent.length).toBe(1)
+  })
+
+  test('logs how many old outputs it cleared', async () => {
+    const lines: string[] = []
+    const world = { ...net([ok(answer([0.05]))]), log: (line: string) => lines.push(line) }
+    await judge(world as any, SETTINGS, messages)
+    expect(lines).toContain('[context-left] Jev cleared 1 of 1 old tool outputs')
   })
 
   test('no key, no request', async () => {
@@ -236,20 +257,6 @@ describe('compaction hook', () => {
     call('c'), back('c'),
     call('d'), back('d'),
   ]
-
-  /** The engine's side: what the hook asks of the model, and what reaches `next`. */
-  function env(replies: Reply[], complete: (request: any) => Promise<any>) {
-    const world = net(replies)
-    const asked: any[] = []
-    return {
-      asked,
-      env: {
-        net: world,
-        complete: async (request: any) => (asked.push(request), complete(request)),
-      },
-    }
-  }
-  const summary = (text: string) => async () => ({ isAnswered: true, text })
   const hookInput = (over: Record<string, unknown> = {}) =>
     ({ trigger: 'auto', messages: history(), ...over }) as any
 
@@ -258,77 +265,50 @@ describe('compaction hook', () => {
     return { seen, next: async (e: any) => (seen.push(e), { messages: e.messages }) }
   }
 
-  test('off: the compaction goes down untouched and nothing is asked', async () => {
-    const { env: world, asked } = env([], summary('S'))
+  test('off: the compaction goes down untouched and Jev is not asked', async () => {
+    const world = net([])
     const down = passDown()
     const e = hookInput()
-    await handleCompact(world as any, readSettings({}), e, down.next as any)
+    await handleCompact(world as any, readSettings({ typesafeApiKey: 'k' }), e, down.next as any)
     expect(down.seen[0]).toBe(e)
-    expect(asked.length).toBe(0)
+    expect(world.sent.length).toBe(0)
   })
 
   test('precompute and subagent compactions are left alone', async () => {
-    const { env: world, asked } = env([], summary('S'))
+    const world = net([])
     const down = passDown()
     const settings = readSettings(OPTIONS)
-    await handleCompact(world as any, settings, hookInput({ trigger: 'precompute' }), down.next as any)
-    await handleCompact(world as any, settings, hookInput({ agentId: 'a1' }), down.next as any)
-    expect(down.seen.length).toBe(2)
-    expect(asked.length).toBe(0)
+    const pre = hookInput({ trigger: 'precompute' })
+    const sub = hookInput({ agentId: 'a1' })
+    await handleCompact(world as any, settings, pre, down.next as any)
+    await handleCompact(world as any, settings, sub, down.next as any)
+    expect(down.seen).toEqual([pre, sub])
+    expect(world.sent.length).toBe(0)
   })
 
-  test('clears what Jev says, then Sonnet at medium effort writes the summary', async () => {
-    const { env: world, asked } = env([ok(answer([0.05]))], summary('GOAL: fix the bug'))
+  test('clears what Jev says, then the engine writes the summary with the pin', async () => {
+    const world = net([ok(answer([0.05]))])
     const down = passDown()
-    const out: any = await handleCompact(world as any, readSettings(OPTIONS), hookInput(), down.next as any)
-    expect(down.seen.length).toBe(0)
-    expect(asked[0]).toMatchObject({ model: 'sonnet', effort: 'medium' })
-    expect(asked[0].prompt).toContain('fix the bug')
-    expect(asked[0].prompt).toContain(CLEARED)
-    expect(asked[0].prompt).not.toContain(BIG)
-    expect(out.messages.length).toBe(1)
-    expect(out.messages[0].role).toBe('user')
-    expect(out.messages[0].text).toContain('GOAL: fix the bug')
-  })
-
-  test('the settings choose the model and effort', async () => {
-    const { env: world, asked } = env([ok(answer([0.05]))], summary('S'))
-    const settings = readSettings({ ...OPTIONS, compactModel: 'opus', compactEffort: 'high' })
-    await handleCompact(world as any, settings, hookInput(), passDown().next as any)
-    expect(asked[0]).toMatchObject({ model: 'opus', effort: 'high' })
-  })
-
-  test('a failed summary falls back to the engine, with the cleared messages and the pin', async () => {
-    const { env: world } = env([ok(answer([0.05]))], async () => ({ isAnswered: false, reason: 'api-error' }))
-    const down = passDown()
-    await handleCompact(world as any, readSettings(OPTIONS), hookInput({ instructions: 'keep the plan' }), down.next as any)
+    const out: any = await handleCompact(
+      world as any,
+      readSettings(OPTIONS),
+      hookInput({ instructions: 'keep the plan' }),
+      down.next as any,
+    )
     const sent = down.seen[0]
     expect(sent.messages[2].toolResults[0].text).toBe(CLEARED)
+    expect(sent.messages[4].toolResults[0].text).toBe(BIG)
     expect(sent.instructions).toContain('keep the plan')
     expect(sent.instructions).toContain(PIN_INSTRUCTIONS)
+    expect(out.messages).toBe(sent.messages)
   })
 
-  test('a model call that throws falls back the same way', async () => {
-    const { env: world } = env([ok(answer([0.05]))], async () => {
-      throw new Error('bad effort')
-    })
+  test('Jev down: nothing is cleared, the engine still compacts with the pin', async () => {
+    const world = net([status(500), status(500), status(500)])
     const down = passDown()
     await handleCompact(world as any, readSettings(OPTIONS), hookInput(), down.next as any)
-    expect(down.seen.length).toBe(1)
-  })
-
-  test('a transcript too long for one call falls back to the engine', async () => {
-    const long = Array.from({ length: 60 }, (_, i) => ask('x'.repeat(10_000) + i))
-    const { env: world, asked } = env([], summary('S'))
-    const down = passDown()
-    await handleCompact(world as any, readSettings(OPTIONS), hookInput({ messages: long }), down.next as any)
-    expect(asked.length).toBe(0)
-    expect(down.seen.length).toBe(1)
-  })
-
-  test('Jev down: nothing is cleared, the summary is still written', async () => {
-    const { env: world, asked } = env([status(500), status(500), status(500)], summary('S'))
-    await handleCompact(world as any, readSettings(OPTIONS), hookInput(), passDown().next as any)
-    expect(asked[0].prompt).not.toContain(CLEARED)
+    const sent = down.seen[0]
+    expect(sent.messages[2].toolResults[0].text).toBe(BIG)
+    expect(sent.instructions).toBe(PIN_INSTRUCTIONS)
   })
 })

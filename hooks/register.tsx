@@ -45,9 +45,6 @@ function hasText(node: unknown): boolean {
   return false
 }
 
-/** The engine may still count the turn as running when `turn.complete` fires. */
-const START_DELAY_MS = 1000
-
 export const register: Register = (on, options) => {
   const settings = readSettings(options)
   // Set when a compaction starts; cleared once usage falls below the threshold.
@@ -73,27 +70,22 @@ export const register: Register = (on, options) => {
     const { context } = await $.session.usage()
     if (context.percent === undefined || !shouldFire(settings, context.percent, armed)) return done
     armed = false
-    void (async () => {
-      await $.clock.sleep(START_DELAY_MS)
-      try {
-        await $.session.compact({ instructions: PIN_INSTRUCTIONS })
-      } catch (error) {
-        armed = true
-        $.ui.log(`[context-left] compaction not started: ${String(error)}`)
-      }
-    })()
+    // Start now, not after a wait: a queued background event starts the next
+    // turn within a second, and the engine refuses a compaction during a turn.
+    // Not awaited, so the turn can close. A refusal re-arms for the next turn.
+    $.session.compact({ instructions: PIN_INSTRUCTIONS }).catch(error => {
+      armed = true
+      $.ui.log(`[context-left] compaction not started: ${String(error)}`)
+    })
     return done
   })
 
   on('session.compact', async ($, e, next) =>
     handleCompact(
       {
-        net: {
-          fetch: (url, init) => $.http.fetch(url, init),
-          sleep: ms => $.clock.sleep(ms),
-          log: line => $.ui.log(line),
-        },
-        complete: request => $.model.complete(request),
+        fetch: (url, init) => $.http.fetch(url, init),
+        sleep: ms => $.clock.sleep(ms),
+        log: line => $.ui.log(line),
       },
       settings,
       e,
